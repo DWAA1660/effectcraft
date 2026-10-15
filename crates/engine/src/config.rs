@@ -165,18 +165,18 @@ impl ConfigStore for DirConfig {
 }
 
 /// A new, empty temporary file next to `path` for an atomic write of it, and its path. The name
-/// is unique to this process and this write (`.<name>.<pid>-<n>.tmp`) and the file is created
+/// is unique to this process and this write (`.effectcraft-<pid>-<n>.tmp`) and the file is created
 /// exclusively, so two writers never share one and nothing already at that name (a file, a
 /// symbolic link) is opened or followed (#1233). It ends in `.tmp`, so a file left by a hard
-/// kill never counts as an auto-save.
+/// kill never counts as an auto-save. Its bounded name does not include the destination's name,
+/// so a valid long destination name still fits the filesystem's component limit.
 fn create_temp(path: &Path) -> std::io::Result<(std::fs::File, PathBuf)> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(0);
-    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let mut last = None;
     for _ in 0..16 {
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
-        let tmp = path.with_file_name(format!(".{name}.{}-{n}.tmp", std::process::id()));
+        let tmp = path.with_file_name(format!(".effectcraft-{}-{n}.tmp", std::process::id()));
         match std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp) {
             Ok(f) => return Ok((f, tmp)),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => last = Some(e),

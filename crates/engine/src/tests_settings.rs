@@ -555,6 +555,23 @@ fn names(d: &std::path::Path) -> Vec<String> {
     v
 }
 
+#[cfg(unix)]
+#[test]
+fn atomic_write_overwrites_a_long_valid_filename() {
+    let d = tmp("atomic-long-name");
+    // The old `<name>.tmp` fits a 255-byte component limit for this 251-byte project name.
+    // Including the full name plus a process id and counter made an otherwise valid save fail.
+    let name = format!("{}.ecproj", "x".repeat(244));
+    assert_eq!(name.len(), 251);
+    let f = d.join(&name);
+    std::fs::write(&f, b"original project").unwrap();
+    let replacement = b"replacement project\0bytes\xff";
+    atomic_write(&f, replacement).unwrap();
+    assert_eq!(std::fs::read(&f).unwrap(), replacement);
+    assert_eq!(names(&d), [name], "no temporary file is left after overwriting the project");
+    let _ = std::fs::remove_dir_all(d);
+}
+
 #[test]
 fn concurrent_atomic_writes_each_publish_a_whole_file() {
     // Writers of the same file used to share one `.tmp`: they truncated each other's data and
