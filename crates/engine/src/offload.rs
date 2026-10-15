@@ -171,6 +171,20 @@ pub enum JobKind {
 }
 
 impl JobKind {
+    /// The corresponding `jobs.list` id, also used by waiting control commands.
+    pub fn job_id(self) -> &'static str {
+        match self {
+            JobKind::Render => "render",
+            JobKind::Warp => "warp",
+            JobKind::WarpPlan => "warpPlan",
+            JobKind::Camera => "camera",
+            JobKind::RotoFreeze | JobKind::RotoPropagate => "roto",
+            JobKind::Track => "track",
+            JobKind::MaskTrack => "maskTrack",
+            JobKind::ContentFill => "contentFill",
+        }
+    }
+
     /// The undo step an analysis result becomes.
     pub fn label(self) -> &'static str {
         match self {
@@ -784,7 +798,7 @@ impl Session {
                         j.progress.done = done;
                         j.progress.total = total;
                     }
-                    WorkerReply::Group { comp, layer, group, message } => results.push((j.kind, comp, layer, group, message, j.base.clone())),
+                    WorkerReply::Group { comp, layer, group, message } => results.push((j.id, j.kind, comp, layer, group, message, j.base.clone())),
                     WorkerReply::Fill { plan, files } => fills.push((plan, files)),
                     WorkerReply::WarpPlan { key, summary } => effectcraft_effects::warp_stab::store_summary(key, *summary),
                     WorkerReply::Segs { segs } => {
@@ -807,7 +821,7 @@ impl Session {
                 Err(e) => self.events.push(Event::Toast { message: format!("Content-Aware Fill: {e}"), error: true }),
             }
         }
-        for (kind, comp, layer, group, message, base) in results {
+        for (id, kind, comp, layer, group, message, base) in results {
             let uid = group.uid;
             let r = self.edit(kind.label(), None, |p, _| {
                 let g = p
@@ -830,7 +844,16 @@ impl Session {
             });
             match r {
                 Ok(()) => self.events.push(Event::Toast { message, error: false }),
-                Err(e) => self.events.push(Event::Toast { message: format!("{}: {e}", kind.label()), error: true }),
+                Err(e) => {
+                    // Completion consumers read the job's error, not its toasts. Keep an apply
+                    // rejection on the originating job; Done logs and reports it just like a
+                    // WorkerReply::Failed, without failing another concurrent analysis.
+                    if let Some(job) = self.offloaded.iter_mut().find(|j| j.id == id) {
+                        job.progress.error = Some(e.to_string());
+                    } else {
+                        self.events.push(Event::Toast { message: format!("{}: {e}", kind.label()), error: true });
+                    }
+                }
             }
         }
         let mut done = vec![];
@@ -845,6 +868,7 @@ impl Session {
             self.offload_log.push((kind, p.error.clone().or_else(|| p.cancelled.then(|| "stopped".to_string()))));
             if self.offload_log.len() > 32 {
                 self.offload_log.remove(0);
+                self.offload_log_start = self.offload_log_start.saturating_add(1);
             }
             if let Some(e) = p.error {
                 self.events.push(Event::Toast { message: format!("{}: {e}", kind.label()), error: true });
